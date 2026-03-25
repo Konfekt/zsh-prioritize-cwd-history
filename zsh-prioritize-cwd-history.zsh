@@ -1,7 +1,7 @@
 # Scope history to the current working directory.
 # Idea from https://github.com/jimhester/per-directory-history
 # https://github.com/ericfreese/zsh-cwd-history
-# v0.3.0
+# v0.4.0
 # Copyright (c) 2016 Eric Freese
 #
 # Permission is hereby granted, free of charge, to any person
@@ -25,130 +25,109 @@
 # FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
 # OTHER DEALINGS IN THE SOFTWARE.
 
-# Exit if history is disable
-[ -r "$HISTFILE" ] || return
+# Exit if history is disabled
+[[ -n "$HISTFILE" ]] || return
 
-# We use timestamps as unique keys for commands in the history file
+# Extended history gives us timestamps for ordering
 setopt EXTENDED_HISTORY
 
-# We reload global history from $HISTFILE on directory change
-# Have to write to the file incrementally to avoid losing history on
-# directory change.
+# Incremental append after each command finishes — prevents history loss
+# when we reload the history list on directory change.
 setopt INC_APPEND_HISTORY_TIME
 
-ZSH_PRIORITIZE_CWD_HISTORY_DIR="$HOME/.zsh_prioritize_cwd_history"
+# Load modules once at source time (not per-hook)
+zmodload -F zsh/datetime +p:EPOCHSECONDS 2>/dev/null
+zmodload -F zsh/parameter +p:commands 2>/dev/null
+
+# Config: where per-directory history files live
+: ${ZSH_PRIORITIZE_CWD_HISTORY_DIR:="$HOME/.zsh_prioritize_cwd_history"}
+# Config: max lines kept per directory (physical lines; generous for multiline cmds)
+: ${ZSH_PRIORITIZE_CWD_HISTORY_MAX:=2000}
+
+# Track whether we've pushed onto the fc history stack
+typeset -gi _zsh_pcwdh_pushed=0
 
 #--------------------------------------------------------------------#
-# Histrefs files store timestamp references to entries in HISTFILE   #
+# Per-directory history files (cwdhist-<md5>)                        #
+#                                                                    #
+# Each file stores EXTENDED_HISTORY entries executed in that dir.    #
+# On chpwd: fc -p $HISTFILE (global) then fc -R <cwdhist> (overlay) #
+# → CWD commands always appear most-recent in UP-arrow / search.    #
 #--------------------------------------------------------------------#
 
-# Use an appropriate md5 command (md5 is BSD, md5sum is GNU),
-# whichever is actually available
-zmodload -F zsh/parameter +p:commands
 _zsh_prioritize_cwd_history_md5() {
-	if (( $+commands[md5] )); then
-		md5 -q
-	elif (( $+commands[md5sum] )); then
-		md5sum | cut -d ' ' -f 1
+	if (( $+commands[md5sum] )); then
+		printf '%s' "$1" | command md5sum | command cut -d ' ' -f 1
+	elif (( $+commands[md5] )); then
+		printf '%s' "$1" | command md5 -q
 	else
-		echo "zsh-prioritize-cwd-history: md5 or md5sum command required"
+		print -u2 "zsh-prioritize-cwd-history: md5sum or md5 required"
 		return 1
 	fi
 }
 
-# Prints to STDOUT the name of the histrefs file to use for current
-# working directory
-_zsh_prioritize_cwd_history_histrefs_for_cwd() {
+# Returns path to per-CWD history file
+_zsh_prioritize_cwd_history_file_for_cwd() {
 	local md5
-	md5=$(echo "${PWD:A}" | _zsh_prioritize_cwd_history_md5)
-
-	echo "$ZSH_PRIORITIZE_CWD_HISTORY_DIR/histrefs-$md5"
+	md5=$(_zsh_prioritize_cwd_history_md5 "${PWD:A}") || return 1
+	print -r -- "${ZSH_PRIORITIZE_CWD_HISTORY_DIR}/cwdhist-${md5}"
 }
 
-# Prints to STDOUT up to 1000 of the last history entries that were
-# executed in the current working directory
-_zsh_prioritize_cwd_history_cwd_hist_entries() {
-	local histrefs
-	histrefs=$(_zsh_prioritize_cwd_history_histrefs_for_cwd)
-
-	[ -s "$histrefs" ] || return
-
-	# shrink histrefs file to 1000 lines
-	tail -1000 "$histrefs" >| "${histrefs}.tmp" \
-		&& mv -f "${histrefs}.tmp" "$histrefs"
-
-	# Build a grep pattern that will pick out from HISTFILE all
-	# history entries (that were saved with EXTENDED_HISTORY)
-	# referenced by the histrefs file
-	local pattern
-	pattern="$(awk 'NR>1 {printf "\\|"} { print "^: " $0 }' ORS='' "$histrefs")"
-
-	[ -n "$pattern" ] || return
-
-	grep -a "$pattern" < "$HISTFILE"
-}
-
-# Reads history entries executed in the current working directory into
-# the history list
-_zsh_prioritize_cwd_history_load_cwd_history() {
-	local histrefs
-	histrefs=$(_zsh_prioritize_cwd_history_histrefs_for_cwd)
-
-	[ -s "$histrefs" ] || return
-
-	# TODO: Validate format of histrefs file
-	# [ (valid_histrefs) ] || return
-
-	# Create a tmp file for use with `fc -R`
-	local tmp_histfile
-	tmp_histfile=$(mktemp -t)
-
-	# Copy history entries executed in this directory to tmp file
-	_zsh_prioritize_cwd_history_cwd_hist_entries >| "$tmp_histfile"
-
-	# Read the history entries from the tmp file
-	fc -R "$tmp_histfile"
-
-	# All done, remove the tmp file
-	rm "$tmp_histfile"
+# Amortised trim: only when file exceeds 2× max (avoids constant I/O).
+# Uses PID-suffixed tmp to avoid clobbering concurrent trims.
+_zsh_prioritize_cwd_history_trim() {
+	local file=$1
+	[[ -f $file ]] || return 0
+	local -i lines
+	lines=$(command wc -l < "$file" 2>/dev/null) || return 0
+	(( lines > ZSH_PRIORITIZE_CWD_HISTORY_MAX * 2 )) || return 0
+	local tmp="${file}.trim.$$"
+	command tail -n "$ZSH_PRIORITIZE_CWD_HISTORY_MAX" "$file" >| "$tmp" && \
+		command mv -f "$tmp" "$file" || \
+		command rm -f "$tmp"
 }
 
 #--------------------------------------------------------------------#
-# Zsh Hooks                                                          #
+# Hooks                                                              #
 #--------------------------------------------------------------------#
 
-# Initialize on first prompt, then remove the precmd hook
+# Initialize on first prompt, then remove itself
 _zsh_prioritize_cwd_history_initialize() {
-	# Remove the precmd hook so this is only called once
 	add-zsh-hook -d precmd _zsh_prioritize_cwd_history_initialize
-
-	# Simulate initial chpwd
 	_zsh_prioritize_cwd_history_cwd_changed
-
-	# Add a hook to save histrefs
 	add-zsh-hook zshaddhistory _zsh_prioritize_cwd_history_addhistory
-
-	# Add a hook to reload history on chpwd
 	add-zsh-hook chpwd _zsh_prioritize_cwd_history_cwd_changed
 }
 
-# Read current working directory history when changing dirs
+# Reload history on directory change:
+#   1. Pop previous push (skip on very first call — nothing to pop)
+#   2. Push fresh global history from $HISTFILE
+#   3. Overlay CWD-specific entries → they appear most-recent
 _zsh_prioritize_cwd_history_cwd_changed() {
-	# Reset history list from $HISTFILE
-	fc -P; fc -p "$HISTFILE"
+	(( _zsh_pcwdh_pushed )) && fc -P
+	fc -p "$HISTFILE"
+	_zsh_pcwdh_pushed=1
 
-	# Read in history for this dir after global history
-	_zsh_prioritize_cwd_history_load_cwd_history
+	local cwd_histfile
+	cwd_histfile=$(_zsh_prioritize_cwd_history_file_for_cwd) || return
+	[[ -s $cwd_histfile ]] || return
+	_zsh_prioritize_cwd_history_trim "$cwd_histfile"
+	fc -R "$cwd_histfile"
 }
 
-# Save a histref every time we save something to history
+# Write each command to the per-CWD history file in EXTENDED_HISTORY format.
+# Always returns 0 so normal history saving is never blocked.
 _zsh_prioritize_cwd_history_addhistory() {
-	local histrefs
-	histrefs=$(_zsh_prioritize_cwd_history_histrefs_for_cwd)
+	local cwd_histfile
+	cwd_histfile=$(_zsh_prioritize_cwd_history_file_for_cwd) || return 0
+	[[ -d $ZSH_PRIORITIZE_CWD_HISTORY_DIR ]] || command mkdir -p "$ZSH_PRIORITIZE_CWD_HISTORY_DIR"
 
-	[ -d "$ZSH_PRIORITIZE_CWD_HISTORY_DIR" ] || mkdir -p "$ZSH_PRIORITIZE_CWD_HISTORY_DIR"
-
-	date +%s >>| "$histrefs"
+	# Format: `: timestamp:0;command`  (duration unknown at entry time)
+	# Strip trailing newline; escape embedded newlines for multiline cmds
+	local cmd=${1%%$'\n'}
+	cmd=${cmd//$'\n'/$'\\\n'}
+	print -r -- ": ${EPOCHSECONDS}:0;${cmd}" >>| "$cwd_histfile"
+	return 0
 }
 
 autoload -Uz add-zsh-hook
