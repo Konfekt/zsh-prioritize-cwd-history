@@ -2,6 +2,8 @@
 
 _Prioritizes history entries executed from the current working directory._
 
+Forked from [ericfreese/zsh-prioritize-cwd-history](https://github.com/ericfreese/zsh-prioritize-cwd-history) by [@ceed0](https://github.com/ceed0).
+
 <a href="https://asciinema.org/a/7o75n5k4dmmr6aywc84e20ll9" target="_blank"><img src="https://asciinema.org/a/7o75n5k4dmmr6aywc84e20ll9.png" width="500" /></a>
 
 
@@ -12,7 +14,7 @@ _Prioritizes history entries executed from the current working directory._
 1. Clone this repository somewhere on your machine. This guide will assume `~/.zsh/zsh-prioritize-cwd-history`.
 
     ```sh
-    git clone git://github.com/ericfreese/zsh-prioritize-cwd-history ~/.zsh/zsh-prioritize-cwd-history
+    git clone https://github.com/Konfekt/zsh-prioritize-cwd-history ~/.zsh/zsh-prioritize-cwd-history
     ```
 
 2. Add the following to your `.zshrc`:
@@ -29,7 +31,7 @@ _Prioritizes history entries executed from the current working directory._
 1. Clone this repository into `$ZSH_CUSTOM/plugins` (by default `~/.oh-my-zsh/custom/plugins`)
 
     ```sh
-    git clone git://github.com/ericfreese/zsh-prioritize-cwd-history $ZSH_CUSTOM/plugins/zsh-prioritize-cwd-history
+    git clone https://github.com/Konfekt/zsh-prioritize-cwd-history $ZSH_CUSTOM/plugins/zsh-prioritize-cwd-history
     ```
 
 2. Add the plugin to the list of plugins for Oh My Zsh to load:
@@ -50,25 +52,30 @@ When you change directories, the zsh history list will be updated to show comman
 
 ## Configuration
 
-You may want to override the default global config variables after sourcing the plugin. Default values of these variables can be found [here](src/config.zsh).
-
-**Note:** If you are using Oh My Zsh, you can put this configuration in a file in the `$ZSH_CUSTOM` directory. See their comments on [overriding internals](https://github.com/robbyrussell/oh-my-zsh/wiki/Customization#overriding-internals).
+Set these variables **after** sourcing the plugin to override defaults.
 
 
 ### History Directory
 
-You can configure the location where history metadata will be saved by setting the `$ZSH_PRIORITIZE_CWD_HISTORY_DIR` global variable after sourcing this plugin.
-
-For example:
+Where per-directory history files are stored (default: `~/.zsh_prioritize_cwd_history`):
 
 ```shell
 ZSH_PRIORITIZE_CWD_HISTORY_DIR=~/my/special/dir
 ```
 
+### Max Entries per Directory
+
+Maximum physical lines kept per directory (default: `2000`).
+Trimming is amortised — it only runs when the file exceeds twice this limit.
+
+```shell
+ZSH_PRIORITIZE_CWD_HISTORY_MAX=2000
+```
+
 
 ## Troubleshooting
 
-If you have a problem, please search through [the list of issues on GitHub](https://github.com/ericfreese/zsh-prioritize-cwd-history/issues) to see if someone else has already reported it.
+If you have a problem, please search through [the list of issues on GitHub](https://github.com/Konfekt/zsh-prioritize-cwd-history/issues) to see if someone else has already reported it.
 
 
 ### Reporting an Issue
