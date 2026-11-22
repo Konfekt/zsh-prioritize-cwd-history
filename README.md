@@ -61,6 +61,8 @@ It also turns on `EXTENDED_HISTORY`, so that `$HISTFILE` keeps timestamps.
 Commands that zsh keeps out of `$HISTFILE` (`HIST_IGNORE_SPACE`, `HISTORY_IGNORE`) are kept out of the per-directory files, too.
 The directory holding these files is created readable only by you.
 
+The plugin's hooks never abort the running command line or exit the shell, not even with `ERR_EXIT` set.
+
 
 ## Configuration
 

@@ -234,6 +234,32 @@ print "Regression: per-directory history was readable by others"
 [[ $(zstat +mode -o $T/cwd) == *700 ]]
 check "the history directory is private"
 
+print "Regression: the plugin's hooks exited a shell with ERR_EXIT"
+setup errexit
+print 'setopt err_exit' > $T/post.zsh
+out=$(session <<EOF
+cd $T/a
+print alive-a
+cd $T/b; print alive-b
+EOF
+)
+has "$out" alive-a && has "$out" alive-b
+check "cd keeps the shell running"
+
+print "Regression: trimming left the tail of a multiline command as an entry"
+setup trim
+print 'ZSH_PRIORITIZE_CWD_HISTORY_MAX=2' > $T/post.zsh
+command mkdir -p -m 700 $T/cwd
+print -rl -- ': 1:0;old-1' ': 2:0;old-2' ': 3:0;print multi\' 'fragment\' 'end' > $(cwdfile $T/a)
+out=$(session <<EOF
+cd $T/a
+fc -ln 1
+EOF
+)
+[[ $out != *fragment* ]]
+check "no fragment entry after a trim" ||
+	print -r -- "       got: ${(q)out}"
+
 print
 print "$pass passed, $fail failed"
 (( fail == 0 ))

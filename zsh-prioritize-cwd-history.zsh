@@ -40,9 +40,9 @@
 # line.  So lists are popped with SAVEHIST=0, and the original list below
 # the pushed one keeps SAVEHIST=0 so that zsh saves only once on exit.
 #
-# The functions set only the options they need: `emulate -L zsh` would
-# reset the user's history options (locking, duplicates) while zsh reads
-# and writes $HISTFILE.
+# The functions set locally only the options they need, including
+# no_err_exit and no_err_return, so that a failing test inside a hook never
+# exits the shell.
 
 autoload -Uz add-zsh-hook
 # Timestamps in $HISTFILE, as in the per-directory files
@@ -89,7 +89,8 @@ _zsh_prioritize_cwd_history_file_for_cwd() {
 	print -r -- "${ZSH_PRIORITIZE_CWD_HISTORY_DIR}/cwdhist-${md5}"
 }
 
-# Amortised trim: only when the file exceeds twice the maximum.
+# Amortised trim: only when the file exceeds twice the maximum.  Lines
+# before the first entry header are the tail of a cut multiline command.
 _zsh_prioritize_cwd_history_trim() {
 	local file=$1 tmp="$1.trim.$$"
 	local -i lines
@@ -97,7 +98,8 @@ _zsh_prioritize_cwd_history_trim() {
 	lines=$(command wc -l < "$file" 2>/dev/null) || return 0
 	(( lines > ZSH_PRIORITIZE_CWD_HISTORY_MAX * 2 )) || return 0
 	{
-		command tail -n "$ZSH_PRIORITIZE_CWD_HISTORY_MAX" -- "$file" >| "$tmp" &&
+		command tail -n "$ZSH_PRIORITIZE_CWD_HISTORY_MAX" -- "$file" |
+			command sed -n '/^: [0-9]*:[0-9]*;/,$p' >| "$tmp" &&
 			command mv -f -- "$tmp" "$file"
 	} 2>/dev/null || command rm -f -- "$tmp"
 	return 0
@@ -105,7 +107,7 @@ _zsh_prioritize_cwd_history_trim() {
 
 # Rebuild the history list: $HISTFILE first, then the current directory.
 _zsh_prioritize_cwd_history_reload() {
-	setopt local_options no_ksh_arrays no_sh_word_split unset
+	setopt local_options no_ksh_arrays no_sh_word_split unset no_err_exit no_err_return
 	local histfile=$HISTFILE file n
 	local pending=$ZSH_PRIORITIZE_CWD_HISTORY_DIR/.pending.$$
 	local -i hs=$HISTSIZE shs=$SAVEHIST
@@ -161,7 +163,7 @@ _zsh_prioritize_cwd_history_reload() {
 			fc -P
 		fi
 		(( SAVEHIST == 0 )) && SAVEHIST=$shs
-		(( TRY_BLOCK_ERROR = 0 ))
+		TRY_BLOCK_ERROR=0
 	}
 	return 0
 }
@@ -187,7 +189,7 @@ _zsh_prioritize_cwd_history_cwd_changed() {
 # Append the command to the per-directory file.  Always returns 0 so that
 # zsh's own history saving is never blocked.
 _zsh_prioritize_cwd_history_addhistory() {
-	setopt local_options no_ksh_arrays no_sh_word_split unset extended_glob
+	setopt local_options no_ksh_arrays no_sh_word_split unset extended_glob no_err_exit no_err_return
 	local cmd=${1%$'\n'} file=$_zsh_pcwdh_file line sep=$'\\\n'
 	local -a lines
 	[[ -n $HISTFILE && -n $cmd ]] || return 0
